@@ -10,7 +10,7 @@
 #include <sys/shm.h>
 #include <semaphore.h>
 #include <fcntl.h>
-#define THRESHOLD 10
+#define THRESHOLD 1
 
 struct timer
 {
@@ -128,15 +128,13 @@ while(!terminate)
 {
 	if(rand()%100 <= THRESHOLD)
 	{
-		snprintf(errmsg, sizeof(errmsg), "USER %d: Slave process terminating!", pid);
-		perror(errmsg);
 		terminate = 1;
 	}
-	else
+	/* else
 	{
 		snprintf(errmsg, sizeof(errmsg), "USER %d: Slave process continuing!", pid);
 		perror(errmsg);
-	}
+	} */
 	
 	/* Calculate Termination Time */
 	termTime.ns = shmTime->ns + rand()%250000000;
@@ -152,10 +150,14 @@ while(!terminate)
 	while(termTime.ns > shmTime->ns);
 
 }
-
+/* snprintf(errmsg, sizeof(errmsg), "USER %d: Slave process sleeping!", pid);
+perror(errmsg);
+sleep(1); */
 /* signal the release the process from the running processes */
 sem_post(semTerm);
-*shmTerm = index;
+shmTerm[index] = 1;
+snprintf(errmsg, sizeof(errmsg), "USER %d: Slave process terminating!", pid);
+perror(errmsg);
 
 /********************MEMORY DETACHMENT********************/
 errno = shmdt(shmTime);
