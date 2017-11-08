@@ -13,8 +13,14 @@
 
 struct timer
 {
-	int seconds;
-	int ns;
+	unsigned int seconds;
+	unsigned int ns;
+};
+
+struct resource
+{
+	unsigned int amt;
+	int shared;
 };
 
 int errno;
@@ -22,9 +28,11 @@ char errmsg[200];
 int shmidTime;
 int shmidChild;
 int shmidTerm;
+int shmidRes;
 struct timer *shmTime;
 int *shmChild;
 int *shmTerm;
+struct resource *shmRes;
 sem_t * semTime;
 sem_t * semTerm;
 /* Insert other shmid values here */
@@ -79,6 +87,20 @@ void sigIntHandler(int signum)
 		perror(errmsg);	
 	}
 	
+	errno = shmdt(shmRes);
+	if(errno == -1)
+	{
+		snprintf(errmsg, sizeof(errmsg), "OSS: shmdt(shmRes)");
+		perror(errmsg);	
+	}
+	
+	errno = shmctl(shmidRes, IPC_RMID, NULL);
+	if(errno == -1)
+	{
+		snprintf(errmsg, sizeof(errmsg), "OSS: shmctl(shmidRes)");
+		perror(errmsg);	
+	}
+	
 	/* Close Semaphore */
 	sem_unlink("semTime");   
     sem_close(semTime);
@@ -103,10 +125,12 @@ char timeArg[33];
 char childArg[33];
 char indexArg[33];
 char termArg[33];
+char resArg[33];
 pid_t pid = getpid();
 key_t keyTime = 8675;
 key_t keyChild = 5309;
 key_t keyTerm = 1138;
+key_t keyRes = 8311;
 FILE *fp;
 char *fileName = "./msglog.out";
 signal(SIGINT, sigIntHandler);
@@ -233,7 +257,7 @@ if ((void *)shmChild == (void *)-1)
     exit(1);
 }
 
-/* Create shared memory segment for a child termination message */
+/* Create shared memory segment for a child termination status */
 shmidTerm = shmget(keyTerm, sizeof(int)*18, IPC_CREAT | 0666);
 if (shmidTerm < 0)
 {
@@ -250,6 +274,24 @@ if ((void *)shmTerm == (void *)-1)
 	perror(errmsg);
     exit(1);
 }
+
+/* Create shared memory segment for a resource vector */
+shmidRes = shmget(keyRes, sizeof(struct resource)*20, IPC_CREAT | 0666);
+if (shmidRes < 0)
+{
+	snprintf(errmsg, sizeof(errmsg), "OSS: shmget(keyRes...)");
+	perror(errmsg);
+	exit(1);
+}
+
+/* Point shmRes to shared memory */
+shmRes = shmat(shmidRes, NULL, 0);
+if ((void *)shmRes == (void *)-1)
+{
+	snprintf(errmsg, sizeof(errmsg), "OSS: shmat(shmidRes)");
+	perror(errmsg);
+    exit(1);
+}
 /********************END ALLOCATION********************/
 
 /********************INITIALIZATION********************/
@@ -257,6 +299,7 @@ if ((void *)shmTerm == (void *)-1)
 sprintf(timeArg, "%d", shmidTime);
 sprintf(childArg, "%d", shmidChild);
 sprintf(termArg, "%d", shmidTerm);
+sprintf(resArg, "%d", shmidRes);
 
 /* Set the time to 00.00 */
 shmTime->seconds = 0;
@@ -267,6 +310,12 @@ for(i =0; i<maxSlaves; i++)
 {
 	shmChild[i] = 0;
 	shmTerm[i] = 0;
+}
+
+/* Random allocation for resources in shmRes */
+for(i = 0; i < 20; i++)
+{
+	shmRes[i].amt = rand()%10+1;
 }
 
 /********************END INITIALIZATION********************/
@@ -370,6 +419,14 @@ for(i = 0; i < maxSlaves; i++)
 		printf("Not killing process #%d, PID = %d\n", i, shmChild[i]);
 	}
 }
+
+/* Display Resource Vector (final result) */
+printf("Resource Vector:\nR0  R1  R2  R3  R4  R5  R6  R7  R8  R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19\n");
+for(i = 0; i < 20; i++)
+{
+	printf("%2d  ", shmRes[i].amt);
+}
+printf("\n");
 /********************DEALLOCATE MEMORY********************/
 errno = shmdt(shmTime);
 if(errno == -1)
@@ -410,6 +467,20 @@ errno = shmctl(shmidTerm, IPC_RMID, NULL);
 if(errno == -1)
 {
 	snprintf(errmsg, sizeof(errmsg), "OSS: shmctl(shmidTerm)");
+	perror(errmsg);	
+}
+
+errno = shmdt(shmRes);
+if(errno == -1)
+{
+	snprintf(errmsg, sizeof(errmsg), "OSS: shmdt(shmRes)");
+	perror(errmsg);	
+}
+
+errno = shmctl(shmidRes, IPC_RMID, NULL);
+if(errno == -1)
+{
+	snprintf(errmsg, sizeof(errmsg), "OSS: shmctl(shmidRes)");
 	perror(errmsg);	
 }
 /********************END DEALLOCATION********************/
