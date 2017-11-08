@@ -234,7 +234,7 @@ if ((void *)shmChild == (void *)-1)
 }
 
 /* Create shared memory segment for a child termination message */
-shmidTerm = shmget(keyTerm, sizeof(int), IPC_CREAT | 0666);
+shmidTerm = shmget(keyTerm, sizeof(int)*18, IPC_CREAT | 0666);
 if (shmidTerm < 0)
 {
 	snprintf(errmsg, sizeof(errmsg), "OSS: shmget(keyTerm...)");
@@ -266,10 +266,9 @@ shmTime->ns = 0;
 for(i =0; i<maxSlaves; i++)
 {
 	shmChild[i] = 0;
+	shmTerm[i] = 0;
 }
 
-/* Set shmTerm to 0 */
-*shmTerm = -1;
 /********************END INITIALIZATION********************/
 
 /********************SEMAPHORE CREATION********************/
@@ -314,6 +313,12 @@ do
 		/* Check that number of currently running processes is under the limit (maxSlaves) */
 		if(numSlaves < maxSlaves)
 		{
+			nextProc.ns += rand()%500000001;
+			if(nextProc.ns >= 1000000000)
+			{
+				nextProc.seconds += 1;
+				nextProc.ns -= 1000000000;
+			}
 			numSlaves += 1;
 			numProc += 1;
 			pid = fork();
@@ -327,17 +332,20 @@ do
 	}
 	
 	/* Check for terminating children */
-	if(*shmTerm != -1)
+	for(i = 0; i < maxSlaves; i++)
 	{
-		sem_wait(semTerm);
-		snprintf(errmsg, sizeof(errmsg), "OSS: shmTerm = %d", *shmTerm);
-		perror(errmsg);
-		wait(shmChild[*shmTerm]);
-		shmChild[*shmTerm] = 0;
-		numSlaves--;
-		*shmTerm = -1;
+		if(shmTerm[i] == 1)
+		{
+			/* sem_wait(semTerm); */
+			snprintf(errmsg, sizeof(errmsg), "OSS: shmTerm %d is terminating!", i);
+			perror(errmsg);
+			/* wait(shmChild[i]); */
+			shmChild[i] = 0;
+			numSlaves--;
+			shmTerm[i] = 0;
+		}
 	}
-	
+		
 	/* Update the clock */
 	shmTime->ns += (rand()%1000) + 1;
 	if(shmTime->ns >= 1000000000)
@@ -348,13 +356,18 @@ do
 	stop = time(NULL);
 }while(stop-start < maxTime && numProc < 100);
 
+sleep(1);
 /* Kill all slave processes */
 for(i = 0; i < maxSlaves; i++)
 {
 	if(shmChild[i] != 0)
 	{
-		printf("Killing process #%d\n", shmChild[i]);
+		printf("Killing process #%d, PID = %d\n", i, shmChild[i]);
 		kill(shmChild[i], SIGINT);
+	}
+	else
+	{
+		printf("Not killing process #%d, PID = %d\n", i, shmChild[i]);
 	}
 }
 /********************DEALLOCATE MEMORY********************/
