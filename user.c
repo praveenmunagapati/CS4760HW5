@@ -11,6 +11,7 @@
 #include <semaphore.h>
 #include <fcntl.h>
 #define THRESHOLD 1
+#define BOUND 25
 
 struct timer
 {
@@ -39,6 +40,7 @@ int *shmTerm;
 struct resource *shmRes;
 sem_t * semTime;
 sem_t * semTerm;
+sem_t * semRes;
 /* Insert other shmid values here */
 
 void sigIntHandler(int signum)
@@ -82,6 +84,7 @@ int o;
 int i;
 int terminate = 0;
 struct timer termTime;
+struct timer reqlTime;
 int timeKey = atoi(argv[1]);
 int childKey = atoi(argv[2]);
 int index = atoi(argv[3]);
@@ -93,6 +96,7 @@ key_t keyTerm = 1138;
 key_t keyRes = 8311;
 signal(SIGINT, sigIntHandler);
 pid = getpid();
+unsigned int nextRes;
 
 /* Seed random number generator */
 srand(pid * time(NULL));
@@ -153,7 +157,23 @@ if(semTerm == SEM_FAILED) {
 	perror(errmsg);
     exit(1);
 }
+
+semRes=sem_open("semRes", 1);
+if(semTerm == SEM_FAILED) {
+	snprintf(errmsg, sizeof(errmsg), "USER %d: sem_open(semRes)...", pid);
+	perror(errmsg);
+    exit(1);
+}
 /********************END SEMAPHORE CREATION********************/
+
+/* Calculate First Request/Release Time */
+reqlTime.ns = shmTime->ns + rand()%(BOUND*1000000);
+reqlTime.seconds = shmTime->seconds;
+if (reqlTime.ns > 1000000000)
+{
+	reqlTime.ns -= 1000000000;
+	reqlTime.seconds += 1;
+}
 
 while(!terminate)
 {
@@ -175,11 +195,51 @@ while(!terminate)
 		termTime.ns -= 1000000000;
 		termTime.seconds += 1;
 	}
+	
+	
 
+	if(reqlTime.seconds <= shmTime->seconds)
+	{
+		if(reqlTime.ns <= shmTime->ns || reqlTime.seconds < shmTime->seconds)
+		{
+			/********************ENTER CRITICAL SECTION********************/
+			/* sem_wait(semRes); */	/* P operation */
+			nextRes = rand()%20;
+			if(shmRes[nextRes].allArray[index] == 0)
+			{
+				shmRes[nextRes].reqArray[index]++;
+				while(shmRes[nextRes].reqArray[index]);
+			}
+			else
+			{
+				if(rand()%5)
+				{
+					shmRes[nextRes].reqArray[index]++;
+					while(shmRes[nextRes].reqArray[index]);
+				}
+				else
+				{
+					shmRes[nextRes].relArray[index] = shmRes[nextRes].allArray[index];
+				}
+			}
+			/* Calculate Next Request/Release Time */
+			reqlTime.ns = shmTime->ns + rand()%(BOUND*1000000);
+			reqlTime.seconds = shmTime->seconds;
+			if (reqlTime.ns > 1000000000)
+			{
+				reqlTime.ns -= 1000000000;
+				reqlTime.seconds += 1;
+			}
+			/* sem_post(semRes); */ /* V operation */  
+			/********************EXIT CRITICAL SECTION********************/
+		}
+	}
+	
+	
 	/* Wait for the system clock to pass the time */
 	while(termTime.seconds > shmTime->seconds);
 	while(termTime.ns > shmTime->ns);
-
+	
 }
 /* snprintf(errmsg, sizeof(errmsg), "USER %d: Slave process sleeping!", pid);
 perror(errmsg);
