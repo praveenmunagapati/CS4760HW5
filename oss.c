@@ -41,6 +41,7 @@ int *shmTerm;
 struct resource *shmRes;
 sem_t * semTime;
 sem_t * semTerm;
+sem_t * semRes;
 /* Insert other shmid values here */
 
 
@@ -112,6 +113,8 @@ void sigIntHandler(int signum)
     sem_close(semTime);
 	sem_unlink("semTerm");
 	sem_close(semTerm);
+	sem_unlink("semRes");
+	sem_close(semRes);
 	/* Exit program */
 	exit(signum);
 }
@@ -119,6 +122,7 @@ void sigIntHandler(int signum)
 int main (int argc, char *argv[]) {
 int o;
 int i;
+int j;
 int children[18] = {0}; 
 int maxSlaves = 1;
 int numSlaves = 0;
@@ -336,6 +340,17 @@ for(i = numShared; i < 20; i++)
 	shmRes[i].shared = 0;
 }
 
+/* Allocation for resource arrays in shmRes */
+for(i = 0; i < 20; i++)
+{
+	for(j = 0; j < maxSlaves; j++)
+	{
+		shmRes[i].reqArray[j] = 0;
+		shmRes[i].allArray[j] = 0;
+		shmRes[i].relArray[j] = 0;
+	}
+}
+
 /********************END INITIALIZATION********************/
 
 /********************SEMAPHORE CREATION********************/
@@ -350,6 +365,12 @@ if(semTime == SEM_FAILED) {
 semTerm=sem_open("semTerm", O_CREAT | O_EXCL, 0644, maxSlaves);
 if(semTerm == SEM_FAILED) {
 	snprintf(errmsg, sizeof(errmsg), "OSS: sem_open(semTerm)...");
+	perror(errmsg);
+	exit(1);
+}    
+semRes=sem_open("semRes", O_CREAT | O_EXCL, 0644, 0);
+if(semRes == SEM_FAILED) {
+	snprintf(errmsg, sizeof(errmsg), "OSS: sem_open(semRes)...");
 	perror(errmsg);
 	exit(1);
 }    
@@ -398,6 +419,26 @@ do
 		}
 	}
 	
+	/* Check for Resource Requests/Releases */
+	for(i = 0; i < 20; i++)
+	{
+		for(j = 0; j < maxSlaves; j++)
+		{
+			if(shmRes[i].reqArray[j] == 1 && shmRes[i].allocation < shmRes[i].amt)
+			{
+				shmRes[i].allocation++;
+				shmRes[i].reqArray[j] = 0;
+				shmRes[i].allArray[j]++;
+			}
+			if(shmRes[i].relArray[j] >= 1)
+			{
+				shmRes[i].allocation -= shmRes[i].relArray[j];
+				shmRes[i].allArray[j] -= shmRes[i].relArray[j];
+				shmRes[i].relArray[j] = 0;
+			}
+		}
+	}
+	
 	/* Check for terminating children */
 	for(i = 0; i < maxSlaves; i++)
 	{
@@ -438,18 +479,52 @@ for(i = 0; i < maxSlaves; i++)
 	}
 }
 
+sleep(1);
 /* Display Resource Vector (final result) */
 printf("Resource Vector:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
 for(i = 0; i < 20; i++)
 {
 	printf("%2d ", shmRes[i].amt);
 }
+/* Display Resource Sharing */
 printf("\nShareable: ");
 for(i = 0; i < 20; i++)
 {
 	printf("%2d ", shmRes[i].shared);
 }
-printf("\n");
+/* Display Resource Allocation Table */
+printf("\n\nAllocation Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+for(i = 0; i < maxSlaves; i++)
+{
+	printf("P%2d:       ", i);
+	for(j = 0; j < 20; j++)
+	{
+		printf("%2d ", shmRes[j].allArray[i]);
+	}
+	printf("\n");
+}
+/* Display Resource Request Table */
+printf("\n\nRequest Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+for(i = 0; i < maxSlaves; i++)
+{
+	printf("P%2d:       ", i);
+	for(j = 0; j < 20; j++)
+	{
+		printf("%2d ", shmRes[j].reqArray[i]);
+	}
+	printf("\n");
+}
+/* Display Resource Release Table */
+printf("\n\nRelease Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+for(i = 0; i < maxSlaves; i++)
+{
+	printf("P%2d:       ", i);
+	for(j = 0; j < 20; j++)
+	{
+		printf("%2d ", shmRes[j].relArray[i]);
+	}
+	printf("\n");
+}
 /********************DEALLOCATE MEMORY********************/
 errno = shmdt(shmTime);
 if(errno == -1)
@@ -513,5 +588,7 @@ sem_unlink("semTime");
 sem_close(semTime);
 sem_unlink("semTerm");
 sem_close(semTerm);
+sem_unlink("semRes");
+sem_close(semRes);
 return 0;
 }
