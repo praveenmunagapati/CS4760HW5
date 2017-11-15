@@ -14,8 +14,20 @@
 
 struct timer
 {
-	int seconds;
-	int ns;
+	unsigned int seconds;
+	unsigned int ns;
+};
+
+struct resource
+{
+	unsigned int amt;
+	unsigned int request;
+	unsigned int allocation;
+	unsigned int release;
+	unsigned int reqArray[18];
+	unsigned int allArray[18];
+	unsigned int relArray[18];
+	int shared;
 };
 
 int errno;
@@ -24,6 +36,7 @@ char errmsg[200];
 struct timer *shmTime;
 int *shmChild;
 int *shmTerm;
+struct resource *shmRes;
 sem_t * semTime;
 sem_t * semTerm;
 /* Insert other shmid values here */
@@ -54,6 +67,13 @@ void sigIntHandler(int signum)
 		snprintf(errmsg, sizeof(errmsg), "USER %d: shmdt(shmTerm)", pid);
 		perror(errmsg);	
 	}
+	
+	errno = shmdt(shmRes);
+	if(errno == -1)
+	{
+		snprintf(errmsg, sizeof(errmsg), "USER %d: shmdt(shmRes)", pid);
+		perror(errmsg);	
+	}
 	exit(signum);
 }
 
@@ -66,9 +86,11 @@ int timeKey = atoi(argv[1]);
 int childKey = atoi(argv[2]);
 int index = atoi(argv[3]);
 int termKey = atoi(argv[4]);
+int resKey = atoi(argv[5]);
 key_t keyTime = 8675;
 key_t keyChild = 5309;
 key_t keyTerm = 1138;
+key_t keyRes = 8311;
 signal(SIGINT, sigIntHandler);
 pid = getpid();
 
@@ -102,6 +124,15 @@ shmTerm = shmat(termKey, NULL, 0);
 if ((void *)shmTerm == (void *)-1)
 {
 	snprintf(errmsg, sizeof(errmsg), "USER: shmat(shmidTerm)");
+	perror(errmsg);
+    exit(1);
+}
+
+/* Point shmRes to shared memory */
+shmRes = shmat(resKey, NULL, 0);
+if ((void *)shmRes == (void *)-1)
+{
+	snprintf(errmsg, sizeof(errmsg), "USER: shmat(shmidRes)");
 	perror(errmsg);
     exit(1);
 }
@@ -178,6 +209,13 @@ errno = shmdt(shmTerm);
 if(errno == -1)
 {
 	snprintf(errmsg, sizeof(errmsg), "USER: shmdt(shmTerm)");
+	perror(errmsg);	
+}
+
+errno = shmdt(shmRes);
+if(errno == -1)
+{
+	snprintf(errmsg, sizeof(errmsg), "USER: shmdt(shmRes)");
 	perror(errmsg);	
 }
 /********************END DETACHMENT********************/
