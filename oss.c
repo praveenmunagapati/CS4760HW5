@@ -20,6 +20,12 @@ struct timer
 struct resource
 {
 	unsigned int amt;
+	unsigned int request;
+	unsigned int allocation;
+	unsigned int release;
+	unsigned int reqArray[18];
+	unsigned int allArray[18];
+	unsigned int relArray[18];
 	int shared;
 };
 
@@ -137,6 +143,7 @@ signal(SIGINT, sigIntHandler);
 time_t start;
 time_t stop;
 struct timer nextProc = {0};
+int numShared = 0;
 
 /* Seed RNG */
 srand(pid * time(NULL));
@@ -318,6 +325,17 @@ for(i = 0; i < 20; i++)
 	shmRes[i].amt = rand()%10+1;
 }
 
+/* Random allocation of shareable resources */
+numShared = rand()%3+3;
+for(i = 0; i < numShared; i++)
+{
+	shmRes[i].shared = 1;
+}
+for(i = numShared; i < 20; i++)
+{
+	shmRes[i].shared = 0;
+}
+
 /********************END INITIALIZATION********************/
 
 /********************SEMAPHORE CREATION********************/
@@ -421,10 +439,15 @@ for(i = 0; i < maxSlaves; i++)
 }
 
 /* Display Resource Vector (final result) */
-printf("Resource Vector:\nR0  R1  R2  R3  R4  R5  R6  R7  R8  R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19\n");
+printf("Resource Vector:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
 for(i = 0; i < 20; i++)
 {
-	printf("%2d  ", shmRes[i].amt);
+	printf("%2d ", shmRes[i].amt);
+}
+printf("\nShareable: ");
+for(i = 0; i < 20; i++)
+{
+	printf("%2d ", shmRes[i].shared);
 }
 printf("\n");
 /********************DEALLOCATE MEMORY********************/
