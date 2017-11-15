@@ -393,7 +393,7 @@ do
 			{
 				pid = getpid();
 				shmChild[i] = pid;
-				execl("./user", "user", timeArg, childArg, indexArg, termArg, (char*)0);
+				execl("./user", "user", timeArg, childArg, indexArg, termArg, resArg, (char*)0);
 			}
 		}
 	}
