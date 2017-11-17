@@ -10,6 +10,7 @@
 #include <sys/shm.h>
 #include <semaphore.h>
 #include <fcntl.h>
+#define DDA 10000
 
 struct timer
 {
@@ -19,7 +20,8 @@ struct timer
 
 struct resource
 {
-	unsigned int amt;
+	unsigned int maxAmt;
+	unsigned int available;
 	unsigned int request;
 	unsigned int allocation;
 	unsigned int release;
@@ -39,9 +41,10 @@ struct timer *shmTime;
 int *shmChild;
 int *shmTerm;
 struct resource *shmRes;
-sem_t * semTime;
+sem_t * semDead;
 sem_t * semTerm;
-sem_t * semRes;
+sem_t * semChild;
+int lockProc[18] = {0};
 /* Insert other shmid values here */
 
 
@@ -109,14 +112,113 @@ void sigIntHandler(int signum)
 	}
 	
 	/* Close Semaphore */
-	sem_unlink("semTime");   
-    sem_close(semTime);
+	sem_unlink("semDead");   
+    sem_close(semDead);
 	sem_unlink("semTerm");
 	sem_close(semTerm);
-	sem_unlink("semRes");
-	sem_close(semRes);
+	sem_unlink("semChild");
+	sem_close(semChild);
 	/* Exit program */
 	exit(signum);
+}
+
+int deadlock(unsigned int maxRes, unsigned int maxSlaves, unsigned int numShared)
+{
+	/* resources */
+	unsigned int work[maxRes]; 
+	/* processes */
+	unsigned int finish[maxSlaves]; 
+	int i;
+	int p;
+	int deadlocked = 0;
+	int numLocked = 0;
+	for(i = 0; i < maxRes; i++)
+	{
+		work[i] = shmRes[i].available;
+	}
+	for(i = 0; i < maxSlaves; i++)
+	{
+		finish[i] = 0;
+	}
+	for(p = 0; p < maxSlaves; p++)
+	{
+		if( finish[p] )
+		{
+			continue;
+		}
+		if(req_lt_avail (work, p, maxRes, numShared))
+		{
+			finish[p] = 1;
+			for(i = 0; i < maxRes; i++)
+			work[i] += shmRes[i].allArray[p];
+			p = -1;
+		}
+	}
+	for(p = 0; p < maxSlaves; p++)
+	{
+		if(!finish[p])
+		{			
+			numLocked++;
+			lockProc[p] = 1;
+			if(numLocked >= 2)
+			{
+				deadlocked = 1;
+			}
+		}
+	}
+	return(deadlocked);
+}
+
+int req_lt_avail(unsigned int *work, unsigned int procNum, unsigned int maxRes, unsigned int numShared)
+{
+	int i;
+	for(i = numShared; i < maxRes; i++)
+	{
+		if(shmRes[i].reqArray[procNum] > work[i])
+		{
+			break;
+		}
+	}
+	return(i == maxRes);
+}
+
+void deadClear(int maxRes, int maxSlaves, int numShared)
+{
+	int i;
+	int killed = 0;
+	for(i = 0; i < maxSlaves; i++)
+	{
+		if(lockProc[i] == 1 && killed == 0)
+		{
+			printf("Killing P%d...\n", i);
+			kill(shmChild[i], SIGINT);
+			sem_wait(semDead);
+			wait(shmChild[i]);
+			killed = 1;
+		}
+		if(killed == 1)
+		{
+			lockProc[i] = 0;
+		}
+	}
+	if(killed == 1)
+	{
+		if(deadlock(maxRes, maxSlaves, numShared))
+		{
+			printf("Deadlock Still Detected!\n");
+			/* Display Deadlocks */
+			printf("Deadlocked Processes:");
+			for(i = 0; i < maxSlaves; i++)
+			{
+				if(lockProc[i] == 1)
+				{
+					printf("P%2d, ", i);
+				}
+			}
+			printf("\nRepeating deadClear()\n");
+			deadClear(maxRes, maxSlaves, numShared);
+		}
+	}
 }
 
 int main (int argc, char *argv[]) {
@@ -148,6 +250,12 @@ time_t start;
 time_t stop;
 struct timer nextProc = {0};
 int numShared = 0;
+int cycles = 0;
+int pKill = -1; 
+int deadlocked = 0;
+int numLocked = 0;
+int deadCount = 0;
+int deadKills = 0;
 
 /* Seed RNG */
 srand(pid * time(NULL));
@@ -269,7 +377,7 @@ if ((void *)shmChild == (void *)-1)
 }
 
 /* Create shared memory segment for a child termination status */
-shmidTerm = shmget(keyTerm, sizeof(int)*18, IPC_CREAT | 0666);
+shmidTerm = shmget(keyTerm, sizeof(int)*19, IPC_CREAT | 0666);
 if (shmidTerm < 0)
 {
 	snprintf(errmsg, sizeof(errmsg), "OSS: shmget(keyTerm...)");
@@ -326,7 +434,8 @@ for(i =0; i<maxSlaves; i++)
 /* Random allocation for resources in shmRes */
 for(i = 0; i < 20; i++)
 {
-	shmRes[i].amt = rand()%10+1;
+	shmRes[i].maxAmt = rand()%10+1;
+	shmRes[i].available = shmRes[i].maxAmt;
 }
 
 /* Random allocation of shareable resources */
@@ -355,22 +464,22 @@ for(i = 0; i < 20; i++)
 
 /********************SEMAPHORE CREATION********************/
 /* Open Semaphore */
-semTime=sem_open("semTime", O_CREAT | O_EXCL, 0644, 1);
-if(semTime == SEM_FAILED) {
-	snprintf(errmsg, sizeof(errmsg), "OSS: sem_open(semTime)...");
+semDead=sem_open("semDead", O_CREAT | O_EXCL, 0644, 0);
+if(semDead == SEM_FAILED) {
+	snprintf(errmsg, sizeof(errmsg), "OSS: sem_open(semDead)...");
 	perror(errmsg);
     exit(1);
 }
 
-semTerm=sem_open("semTerm", O_CREAT | O_EXCL, 0644, maxSlaves);
+semTerm=sem_open("semTerm", O_CREAT | O_EXCL, 0644, 1);
 if(semTerm == SEM_FAILED) {
 	snprintf(errmsg, sizeof(errmsg), "OSS: sem_open(semTerm)...");
 	perror(errmsg);
 	exit(1);
 }    
-semRes=sem_open("semRes", O_CREAT | O_EXCL, 0644, 0);
-if(semRes == SEM_FAILED) {
-	snprintf(errmsg, sizeof(errmsg), "OSS: sem_open(semRes)...");
+semChild=sem_open("semChild", O_CREAT | O_EXCL, 0644, 1);
+if(semChild == SEM_FAILED) {
+	snprintf(errmsg, sizeof(errmsg), "OSS: sem_open(semChild)...");
 	perror(errmsg);
 	exit(1);
 }    
@@ -383,20 +492,26 @@ nextProc.ns = rand()%500000001;
 /* Start the timer */
 start = time(NULL);
 
+
+/**********************Main Program Loop**********************/
 do
 {
 	/* Has enough time passed to spawn a child? */
 	if(shmTime->seconds >= nextProc.seconds && shmTime->ns >= nextProc.ns)
 	{
 		/* Check shmChild for first unused process */
+		sem_wait(semChild);
 		for(i = 0; i < maxSlaves; i++)
 		{
+			
 			if(shmChild[i] == 0)
 			{
 				sprintf(indexArg, "%d", i);
 				break;
 			}
+			
 		}
+		sem_post(semChild);
 		
 		/* Check that number of currently running processes is under the limit (maxSlaves) */
 		if(numSlaves < maxSlaves)
@@ -424,24 +539,55 @@ do
 	{
 		for(j = 0; j < maxSlaves; j++)
 		{
-			if(shmRes[i].reqArray[j] == 1 && shmRes[i].allocation < shmRes[i].amt)
+			if(shmRes[i].reqArray[j] == 1 && shmRes[i].allocation < shmRes[i].maxAmt)
 			{
 				shmRes[i].allocation++;
+				shmRes[i].available--;
 				shmRes[i].reqArray[j] = 0;
 				shmRes[i].allArray[j]++;
 			}
 			if(shmRes[i].relArray[j] >= 1)
 			{
 				shmRes[i].allocation -= shmRes[i].relArray[j];
+				shmRes[i].available += shmRes[i].relArray[j];
 				shmRes[i].allArray[j] -= shmRes[i].relArray[j];
 				shmRes[i].relArray[j] = 0;
 			}
 		}
 	}
 	
+	/* Deadlock Detection Algorithm */
+	if(cycles%DDA == 0 && numSlaves == maxSlaves)
+	{
+			if(deadlock(20, maxSlaves, numShared))
+			{
+				deadlocked = 1;
+				deadCount++;
+				printf("Deadlock Detected!\n");
+				/* Display Deadlocks */
+				printf("Deadlocked Processes:");
+				for(i = 0; i < maxSlaves; i++)
+				{
+					if(lockProc[i] == 1)
+					{
+						printf("P%2d, ", i);
+					}
+				}
+				printf("\n");
+				deadClear(20, maxSlaves, numShared);
+				sleep(1);
+			}
+			else
+			{
+				deadlocked = 0;
+			}
+	}
+	
 	/* Check for terminating children */
+	sem_wait(semTerm);
 	for(i = 0; i < maxSlaves; i++)
 	{
+		
 		if(shmTerm[i] == 1)
 		{
 			/* sem_wait(semTerm); */
@@ -452,18 +598,24 @@ do
 			numSlaves--;
 			shmTerm[i] = 0;
 		}
+		
 	}
+	sem_post(semTerm);
 		
 	/* Update the clock */
-	shmTime->ns += (rand()%1000) + 1;
+	shmTime->ns += (rand()%10000) + 1;
 	if(shmTime->ns >= 1000000000)
 	{
 		shmTime->ns -= 1000000000;
 		shmTime->seconds += 1;
 	}
+	deadKills = shmTerm[19];
+	cycles++;
 	stop = time(NULL);
 }while(stop-start < maxTime && numProc < 100);
+/********************End Main Program Loop********************/
 
+deadKills = shmTerm[19];
 sleep(1);
 /* Kill all slave processes */
 for(i = 0; i < maxSlaves; i++)
@@ -472,6 +624,8 @@ for(i = 0; i < maxSlaves; i++)
 	{
 		printf("Killing process #%d, PID = %d\n", i, shmChild[i]);
 		kill(shmChild[i], SIGINT);
+		sem_wait(semDead);
+		wait(shmChild[i]);
 	}
 	else
 	{
@@ -484,7 +638,7 @@ sleep(1);
 printf("Resource Vector:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
 for(i = 0; i < 20; i++)
 {
-	printf("%2d ", shmRes[i].amt);
+	printf("%2d ", shmRes[i].maxAmt);
 }
 /* Display Resource Sharing */
 printf("\nShareable: ");
@@ -525,6 +679,17 @@ for(i = 0; i < maxSlaves; i++)
 	}
 	printf("\n");
 }
+/* Display Available Resources */
+printf("\n\nAvailable Resources:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
+for(i = 0; i < 20; i++)
+{
+	printf("%2d ", shmRes[i].available);
+}
+printf("\n");
+/* Display Deadlock Count */
+printf("\n\nNumber of Deadlocks: %d\n", deadCount);
+/* Display Deadlock Kills */
+printf("\n\nNumber of Killed Deadlocked Processes: %d\n", deadKills);
 /********************DEALLOCATE MEMORY********************/
 errno = shmdt(shmTime);
 if(errno == -1)
@@ -584,11 +749,11 @@ if(errno == -1)
 /********************END DEALLOCATION********************/
 
 /* Close Semaphore */
-sem_unlink("semTime");   
-sem_close(semTime);
+sem_unlink("semDead");   
+sem_close(semDead);
 sem_unlink("semTerm");
 sem_close(semTerm);
-sem_unlink("semRes");
-sem_close(semRes);
+sem_unlink("semChild");
+sem_close(semChild);
 return 0;
 }
