@@ -10,8 +10,8 @@
 #include <sys/shm.h>
 #include <semaphore.h>
 #include <fcntl.h>
-#define THRESHOLD 1
-#define BOUND 25
+#define THRESHOLD 10
+#define BOUND 500
 
 struct timer
 {
@@ -21,7 +21,8 @@ struct timer
 
 struct resource
 {
-	unsigned int amt;
+	unsigned int maxAmt;
+	unsigned int available;
 	unsigned int request;
 	unsigned int allocation;
 	unsigned int release;
@@ -32,22 +33,38 @@ struct resource
 };
 
 int errno;
+int myIndex;
 pid_t pid;
 char errmsg[200];
 struct timer *shmTime;
 int *shmChild;
 int *shmTerm;
 struct resource *shmRes;
-sem_t * semTime;
+sem_t * semDead;
 sem_t * semTerm;
-sem_t * semRes;
+sem_t * semChild;
+
 /* Insert other shmid values here */
 
 void sigIntHandler(int signum)
 {
+	int i;
 	
-	snprintf(errmsg, sizeof(errmsg), "USER %d: Caught SIGINT! Killing all child processes.", pid);
+	snprintf(errmsg, sizeof(errmsg), "USER %d: Caught SIGINT! Killing process #%d.", pid, myIndex);
 	perror(errmsg);	
+	
+	for(i = 0; i < 20; i++)
+	{
+		shmRes[i].relArray[myIndex] = shmRes[i].allArray[myIndex];
+		shmRes[i].reqArray[myIndex] = 0;
+	}
+	
+	sem_wait(semTerm);
+	shmTerm[myIndex] = 1;
+	shmTerm[19]++;
+	sem_post(semTerm);
+	
+	sem_post(semDead);
 	
 	errno = shmdt(shmTime);
 	if(errno == -1)
@@ -88,6 +105,7 @@ struct timer reqlTime;
 int timeKey = atoi(argv[1]);
 int childKey = atoi(argv[2]);
 int index = atoi(argv[3]);
+myIndex = index;
 int termKey = atoi(argv[4]);
 int resKey = atoi(argv[5]);
 key_t keyTime = 8675;
@@ -144,9 +162,9 @@ if ((void *)shmRes == (void *)-1)
 
 /********************SEMAPHORE CREATION********************/
 /* Open Semaphore */
-semTime=sem_open("semTime", 1);
-if(semTime == SEM_FAILED) {
-	snprintf(errmsg, sizeof(errmsg), "USER %d: sem_open(semTime)...", pid);
+semDead=sem_open("semDead", 1);
+if(semDead == SEM_FAILED) {
+	snprintf(errmsg, sizeof(errmsg), "USER %d: sem_open(semDead)...", pid);
 	perror(errmsg);
     exit(1);
 }
@@ -158,16 +176,16 @@ if(semTerm == SEM_FAILED) {
     exit(1);
 }
 
-semRes=sem_open("semRes", 1);
+semChild=sem_open("semChild", 1);
 if(semTerm == SEM_FAILED) {
-	snprintf(errmsg, sizeof(errmsg), "USER %d: sem_open(semRes)...", pid);
+	snprintf(errmsg, sizeof(errmsg), "USER %d: sem_open(semChild)...", pid);
 	perror(errmsg);
     exit(1);
 }
 /********************END SEMAPHORE CREATION********************/
 
 /* Calculate First Request/Release Time */
-reqlTime.ns = shmTime->ns + rand()%(BOUND*1000000);
+reqlTime.ns = shmTime->ns + rand()%(BOUND);
 reqlTime.seconds = shmTime->seconds;
 if (reqlTime.ns > 1000000000)
 {
@@ -203,7 +221,7 @@ while(!terminate)
 		if(reqlTime.ns <= shmTime->ns || reqlTime.seconds < shmTime->seconds)
 		{
 			/********************ENTER CRITICAL SECTION********************/
-			/* sem_wait(semRes); */	/* P operation */
+			/* sem_wait(semChild); */	/* P operation */
 			nextRes = rand()%20;
 			if(shmRes[nextRes].allArray[index] == 0)
 			{
@@ -212,7 +230,7 @@ while(!terminate)
 			}
 			else
 			{
-				if(rand()%5)
+				if(rand()%10)
 				{
 					shmRes[nextRes].reqArray[index]++;
 					while(shmRes[nextRes].reqArray[index]);
@@ -223,14 +241,14 @@ while(!terminate)
 				}
 			}
 			/* Calculate Next Request/Release Time */
-			reqlTime.ns = shmTime->ns + rand()%(BOUND*1000000);
+			reqlTime.ns = shmTime->ns + rand()%(BOUND);
 			reqlTime.seconds = shmTime->seconds;
 			if (reqlTime.ns > 1000000000)
 			{
 				reqlTime.ns -= 1000000000;
 				reqlTime.seconds += 1;
 			}
-			/* sem_post(semRes); */ /* V operation */  
+			/* sem_post(semChild); */ /* V operation */  
 			/********************EXIT CRITICAL SECTION********************/
 		}
 	}
@@ -245,10 +263,12 @@ while(!terminate)
 perror(errmsg);
 sleep(1); */
 /* signal the release the process from the running processes */
-sem_post(semTerm);
+sem_wait(semTerm);
 shmTerm[index] = 1;
+sem_post(semTerm);
 snprintf(errmsg, sizeof(errmsg), "USER %d: Slave process terminating!", pid);
 perror(errmsg);
+sem_post(semDead);
 
 /********************MEMORY DETACHMENT********************/
 errno = shmdt(shmTime);
