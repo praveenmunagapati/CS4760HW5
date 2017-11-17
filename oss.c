@@ -33,6 +33,7 @@ struct resource
 
 int errno;
 char errmsg[200];
+FILE *fp;
 int shmidTime;
 int shmidChild;
 int shmidTerm;
@@ -45,6 +46,7 @@ sem_t * semDead;
 sem_t * semTerm;
 sem_t * semChild;
 int lockProc[18] = {0};
+int logCount = 0;
 /* Insert other shmid values here */
 
 
@@ -118,6 +120,8 @@ void sigIntHandler(int signum)
 	sem_close(semTerm);
 	sem_unlink("semChild");
 	sem_close(semChild);
+	/* Close Log File */
+	fclose(fp);
 	/* Exit program */
 	exit(signum);
 }
@@ -185,37 +189,71 @@ int req_lt_avail(unsigned int *work, unsigned int procNum, unsigned int maxRes, 
 void deadClear(int maxRes, int maxSlaves, int numShared)
 {
 	int i;
-	int killed = 0;
+	int j;
+	int killed = -1;
+	int lastKilled = shmTerm[19];
 	for(i = 0; i < maxSlaves; i++)
 	{
-		if(lockProc[i] == 1 && killed == 0)
+		if(lockProc[i] == 1 && killed == -1)
 		{
-			printf("Killing P%d...\n", i);
+			if(logCount < 100000)
+			{
+				snprintf(errmsg, sizeof(errmsg), "\tKilling process P%d:\n", i);
+				fprintf(fp, errmsg);
+				logCount += 1;
+			}
+			if(logCount < 100000)
+			{
+				snprintf(errmsg, sizeof(errmsg), "\t\tResources released are as follows: ");
+				fprintf(fp, errmsg);
+				for(j = 0; j < maxRes; j++)
+				{
+					if(shmRes[j].allArray[i] > 0)
+					{
+						snprintf(errmsg, sizeof(errmsg), "R%d:%d, ", j, shmRes[j].allArray[i]);
+						fprintf(fp, errmsg);
+					}
+				}
+				snprintf(errmsg, sizeof(errmsg), "\n");
+				fprintf(fp, errmsg);
+				logCount += 1;
+			}
 			kill(shmChild[i], SIGINT);
 			sem_wait(semDead);
 			wait(shmChild[i]);
-			killed = 1;
+			killed = i;
 		}
-		if(killed == 1)
+		if(killed != -1)
 		{
 			lockProc[i] = 0;
 		}
 	}
-	if(killed == 1)
+	if(killed != -1)
 	{
+		if(logCount < 100000)
+		{
+			snprintf(errmsg, sizeof(errmsg), "\tMaster running deadlock detection after P%d killed\n", killed);
+			fprintf(fp, errmsg);
+			logCount += 1;
+		}
 		if(deadlock(maxRes, maxSlaves, numShared))
 		{
-			printf("Deadlock Still Detected!\n");
-			/* Display Deadlocks */
-			printf("Deadlocked Processes:");
-			for(i = 0; i < maxSlaves; i++)
+			if(logCount < 100000)
 			{
-				if(lockProc[i] == 1)
+				snprintf(errmsg, sizeof(errmsg), "\tProcesses ");
+				fprintf(fp, errmsg);
+				for(i = 0; i < maxSlaves; i++)
 				{
-					printf("P%2d, ", i);
+					if(lockProc[i] == 1)
+					{
+						snprintf(errmsg, sizeof(errmsg), "P%2d, ", i);
+						fprintf(fp, errmsg);
+					}
 				}
+				snprintf(errmsg, sizeof(errmsg), "deadlocked\n");
+				fprintf(fp, errmsg);
+				logCount += 1;
 			}
-			printf("\nRepeating deadClear()\n");
 			deadClear(maxRes, maxSlaves, numShared);
 		}
 	}
@@ -225,6 +263,8 @@ int main (int argc, char *argv[]) {
 int o;
 int i;
 int j;
+int k;
+int m;
 int children[18] = {0}; 
 int maxSlaves = 1;
 int numSlaves = 0;
@@ -238,13 +278,14 @@ char childArg[33];
 char indexArg[33];
 char termArg[33];
 char resArg[33];
+char buf[200];
 pid_t pid = getpid();
 key_t keyTime = 8675;
 key_t keyChild = 5309;
 key_t keyTerm = 1138;
 key_t keyRes = 8311;
-FILE *fp;
 char *fileName = "./msglog.out";
+int verbose = 0;
 signal(SIGINT, sigIntHandler);
 time_t start;
 time_t stop;
@@ -256,12 +297,13 @@ int deadlocked = 0;
 int numLocked = 0;
 int deadCount = 0;
 int deadKills = 0;
+int requests = 0;
 
 /* Seed RNG */
 srand(pid * time(NULL));
 
 /* Options */
-while ((o = getopt (argc, argv, "hs:l:t:")) != -1)
+while ((o = getopt (argc, argv, "hs:l:t:v")) != -1)
 {
 	switch (o)
 	{
@@ -276,6 +318,8 @@ while ((o = getopt (argc, argv, "hs:l:t:")) != -1)
 			printf(errmsg);
 			snprintf(errmsg, sizeof(errmsg), "-t\tTimeout option: this option sets the maximum run time allowed by the program in seconds before terminating (default 20).\nUsage:\t ./oss -t 5\n");
 			printf(errmsg);
+			snprintf(errmsg, sizeof(errmsg), "-v\tVerbose option: this option affects what information is saved in the log file.\nUsage:\t ./oss -v\n");
+			printf(errmsg);
 			exit(1);
 			break;
 		case 's':
@@ -286,6 +330,9 @@ while ((o = getopt (argc, argv, "hs:l:t:")) != -1)
 			break;
 		case 't':
 			tParam = optarg;
+			break;
+		case 'v':
+			verbose = 1;
 			break;
 		case '?':
 			if (optopt == 's' || optopt == 'l' || optopt == 't')
@@ -316,7 +363,7 @@ if(maxSlaves > 18)
 /* Set name of log file */
 if(lParam != NULL)
 {
-	fp = fopen(lParam, "a");
+	fp = fopen(lParam, "w");
 	if(fp == NULL)
 	{
 		snprintf(errmsg, sizeof(errmsg), "OSS: fopen(lParam).");
@@ -325,7 +372,7 @@ if(lParam != NULL)
 }
 else
 {
-	fp = fopen(fileName, "a");
+	fp = fopen(fileName, "w");
 	if(fp == NULL)
 	{
 		snprintf(errmsg, sizeof(errmsg), "OSS: fopen(fileName).");
@@ -541,6 +588,45 @@ do
 		{
 			if(shmRes[i].reqArray[j] == 1 && shmRes[i].allocation < shmRes[i].maxAmt)
 			{
+				if(logCount < 100000 && verbose == 1)
+				{
+					snprintf(errmsg, sizeof(errmsg), "Master granting P%d request R%d at time %d:%d\n", j, i, shmTime->seconds, shmTime->ns);
+					fprintf(fp, errmsg);
+					logCount += 1;
+				}
+				requests++;
+				if(requests%20 == 0)
+				{
+					/* Display Resource Allocation Table */
+					if(logCount < 100000 && verbose == 1)
+					{
+						snprintf(errmsg, sizeof(errmsg),"Current System Resources:\n");
+						fprintf(fp, errmsg);
+						logCount += 1;
+					}
+					if(logCount < 100000 && verbose == 1)
+					{
+						snprintf(errmsg, sizeof(errmsg),"Resource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+						fprintf(fp, errmsg);
+						logCount += 1;
+					}
+					if(logCount + maxSlaves < 100000 && verbose == 1)
+					{
+						for(k = 0; k < maxSlaves; k++)
+						{
+							snprintf(errmsg, sizeof(errmsg),"P%2d:       ", k);
+							fprintf(fp, errmsg);
+							for(m = 0; m < 20; m++)
+							{
+								snprintf(errmsg, sizeof(errmsg), "%2d ", shmRes[m].allArray[k]);
+								fprintf(fp, errmsg);
+							}
+							snprintf(errmsg, sizeof(errmsg),"\n");
+							fprintf(fp, errmsg);
+							logCount += 1;
+						}
+					}
+				}
 				shmRes[i].allocation++;
 				shmRes[i].available--;
 				shmRes[i].reqArray[j] = 0;
@@ -548,6 +634,12 @@ do
 			}
 			if(shmRes[i].relArray[j] >= 1)
 			{
+				if(logCount < 100000 && verbose == 1)
+				{
+					snprintf(errmsg, sizeof(errmsg), "Master has acknowledged Process P%d releasing R%d at time %d:%d\n", j, i, shmTime->seconds, shmTime->ns);
+					fprintf(fp, errmsg);
+					logCount += 1;
+				}
 				shmRes[i].allocation -= shmRes[i].relArray[j];
 				shmRes[i].available += shmRes[i].relArray[j];
 				shmRes[i].allArray[j] -= shmRes[i].relArray[j];
@@ -559,26 +651,54 @@ do
 	/* Deadlock Detection Algorithm */
 	if(cycles%DDA == 0 && numSlaves == maxSlaves)
 	{
+			if(logCount < 100000)
+			{
+				snprintf(errmsg, sizeof(errmsg), "Master running deadlock detection at time %d:%d\n", shmTime->seconds, shmTime->ns);
+				fprintf(fp, errmsg);
+				logCount += 1;
+			}
 			if(deadlock(20, maxSlaves, numShared))
 			{
 				deadlocked = 1;
 				deadCount++;
-				printf("Deadlock Detected!\n");
-				/* Display Deadlocks */
-				printf("Deadlocked Processes:");
-				for(i = 0; i < maxSlaves; i++)
+				if(logCount < 100000)
 				{
-					if(lockProc[i] == 1)
+					snprintf(errmsg, sizeof(errmsg), "\tProcesses ");
+					fprintf(fp, errmsg);
+					for(i = 0; i < maxSlaves; i++)
 					{
-						printf("P%2d, ", i);
+						if(lockProc[i] == 1)
+						{
+							snprintf(errmsg, sizeof(errmsg), "P%2d, ", i);
+							fprintf(fp, errmsg);
+						}
 					}
+					snprintf(errmsg, sizeof(errmsg), "\b\b deadlocked\n");
+					fprintf(fp, errmsg);
+					logCount += 1;
 				}
-				printf("\n");
+				if(logCount < 100000)
+				{
+					snprintf(errmsg, sizeof(errmsg), "\tAttempting to resolve deadlock...\n", shmTime->seconds, shmTime->ns);
+					fprintf(fp, errmsg);
+					logCount += 1;
+				}
 				deadClear(20, maxSlaves, numShared);
-				sleep(1);
+				if(logCount < 100000)
+				{
+					snprintf(errmsg, sizeof(errmsg), "\tSystem is no longer in deadlock\n", shmTime->seconds, shmTime->ns);
+					fprintf(fp, errmsg);
+					logCount += 1;
+				}
 			}
 			else
 			{
+				if(logCount < 100000)
+				{
+					snprintf(errmsg, sizeof(errmsg), "System is not deadlocked\n", shmTime->seconds, shmTime->ns);
+					fprintf(fp, errmsg);
+					logCount += 1;
+				}
 				deadlocked = 0;
 			}
 	}
@@ -591,8 +711,8 @@ do
 		if(shmTerm[i] == 1)
 		{
 			/* sem_wait(semTerm); */
-			snprintf(errmsg, sizeof(errmsg), "OSS: shmTerm %d is terminating!", i);
-			perror(errmsg);
+			/* snprintf(errmsg, sizeof(errmsg), "OSS: shmTerm %d is terminating!", i);
+			perror(errmsg); */
 			/* wait(shmChild[i]); */
 			shmChild[i] = 0;
 			numSlaves--;
@@ -627,27 +747,26 @@ for(i = 0; i < maxSlaves; i++)
 		sem_wait(semDead);
 		wait(shmChild[i]);
 	}
-	else
+	/*else
 	{
 		printf("Not killing process #%d, PID = %d\n", i, shmChild[i]);
-	}
+	} */
 }
-
 sleep(1);
 /* Display Resource Vector (final result) */
-printf("Resource Vector:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
+/* printf("Resource Vector:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
 for(i = 0; i < 20; i++)
 {
 	printf("%2d ", shmRes[i].maxAmt);
-}
+} */
 /* Display Resource Sharing */
-printf("\nShareable: ");
+/* printf("\nShareable: ");
 for(i = 0; i < 20; i++)
 {
 	printf("%2d ", shmRes[i].shared);
-}
+} */
 /* Display Resource Allocation Table */
-printf("\n\nAllocation Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+/* printf("\n\nAllocation Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
 for(i = 0; i < maxSlaves; i++)
 {
 	printf("P%2d:       ", i);
@@ -656,9 +775,9 @@ for(i = 0; i < maxSlaves; i++)
 		printf("%2d ", shmRes[j].allArray[i]);
 	}
 	printf("\n");
-}
+} */
 /* Display Resource Request Table */
-printf("\n\nRequest Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+/* printf("\n\nRequest Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
 for(i = 0; i < maxSlaves; i++)
 {
 	printf("P%2d:       ", i);
@@ -667,9 +786,9 @@ for(i = 0; i < maxSlaves; i++)
 		printf("%2d ", shmRes[j].reqArray[i]);
 	}
 	printf("\n");
-}
+} */
 /* Display Resource Release Table */
-printf("\n\nRelease Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+/* printf("\n\nRelease Table:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
 for(i = 0; i < maxSlaves; i++)
 {
 	printf("P%2d:       ", i);
@@ -678,14 +797,14 @@ for(i = 0; i < maxSlaves; i++)
 		printf("%2d ", shmRes[j].relArray[i]);
 	}
 	printf("\n");
-}
+} */
 /* Display Available Resources */
-printf("\n\nAvailable Resources:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
+/* printf("\n\nAvailable Resources:\nResource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\nAmount:    ");
 for(i = 0; i < 20; i++)
 {
 	printf("%2d ", shmRes[i].available);
 }
-printf("\n");
+printf("\n"); */
 /* Display Deadlock Count */
 printf("\n\nNumber of Deadlocks: %d\n", deadCount);
 /* Display Deadlock Kills */
@@ -755,5 +874,8 @@ sem_unlink("semTerm");
 sem_close(semTerm);
 sem_unlink("semChild");
 sem_close(semChild);
+
+/* Close Log File */
+fclose(fp);
 return 0;
 }
