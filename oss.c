@@ -10,7 +10,7 @@
 #include <sys/shm.h>
 #include <semaphore.h>
 #include <fcntl.h>
-#define DDA 10000
+#define DDA 100000
 
 struct timer
 {
@@ -177,7 +177,7 @@ int deadlock(unsigned int maxRes, unsigned int maxSlaves, unsigned int numShared
 int req_lt_avail(unsigned int *work, unsigned int procNum, unsigned int maxRes, unsigned int numShared)
 {
 	int i;
-	for(i = numShared; i < maxRes; i++)
+	for(i = 0; i < maxRes; i++)
 	{
 		if(shmRes[i].reqArray[procNum] > work[i])
 		{
@@ -222,6 +222,7 @@ void deadClear(int maxRes, int maxSlaves, int numShared)
 			kill(shmChild[i], SIGINT);
 			sem_wait(semDead);
 			wait(shmChild[i]);
+			/* shmChild[i] = 0; */
 			killed = i;
 		}
 		if(killed != -1)
@@ -584,8 +585,88 @@ do
 		}
 	}
 	
+	/* Check for SHARED Resource Requests/Releases */
+	for(i = 0; i < numShared; i++)
+	{
+		for(j = 0; j < maxSlaves; j++)
+		{
+			if(shmRes[i].reqArray[j] == 1 && shmRes[i].allArray[j] < shmRes[i].maxAmt)
+			{
+				if(logCount < 100000 && verbose == 1)
+				{
+					snprintf(errmsg, sizeof(errmsg), "Master granting P%d request R%d at time %d:%d\n", j, i, shmTime->seconds, shmTime->ns);
+					fprintf(fp, errmsg);
+					logCount += 1;
+				}
+				requests++;
+				if(requests%20 == 0)
+				{
+					/* Display Resource Allocation Table */
+					if(logCount < 100000 && verbose == 1)
+					{
+						snprintf(errmsg, sizeof(errmsg),"Current System Resources:\n");
+						fprintf(fp, errmsg);
+						logCount += 1;
+					}
+					if(logCount < 100000 && verbose == 1)
+					{
+						snprintf(errmsg, sizeof(errmsg),"Resource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+						fprintf(fp, errmsg);
+						logCount += 1;
+					}
+					if(logCount < 100000 && verbose == 1)
+					{
+						snprintf(errmsg, sizeof(errmsg),"Shared:    ");
+						fprintf(fp, errmsg);
+						for(m = 0; m < 20; m++)
+						{
+							snprintf(errmsg, sizeof(errmsg), "%2d ", shmRes[m].shared);
+							fprintf(fp, errmsg);
+						}
+						snprintf(errmsg, sizeof(errmsg),"\n");
+						fprintf(fp, errmsg);
+						logCount += 1;
+					}
+					if(logCount + maxSlaves < 100000 && verbose == 1)
+					{
+						for(k = 0; k < maxSlaves; k++)
+						{
+							snprintf(errmsg, sizeof(errmsg),"P%2d:       ", k);
+							fprintf(fp, errmsg);
+							for(m = 0; m < 20; m++)
+							{
+								snprintf(errmsg, sizeof(errmsg), "%2d ", shmRes[m].allArray[k]);
+								fprintf(fp, errmsg);
+							}
+							snprintf(errmsg, sizeof(errmsg),"\n");
+							fprintf(fp, errmsg);
+							logCount += 1;
+						}
+					}
+				}
+				/* shmRes[i].allocation++; */
+				/* shmRes[i].available--; */
+				shmRes[i].reqArray[j] = 0;
+				shmRes[i].allArray[j]++;
+			}
+			if(shmRes[i].relArray[j] >= 1)
+			{
+				if(logCount < 100000 && verbose == 1)
+				{
+					snprintf(errmsg, sizeof(errmsg), "Master has acknowledged Process P%d releasing R%d at time %d:%d\n", j, i, shmTime->seconds, shmTime->ns);
+					fprintf(fp, errmsg);
+					logCount += 1;
+				}
+				/* shmRes[i].allocation -= shmRes[i].relArray[j]; */
+				/* shmRes[i].available += shmRes[i].relArray[j]; */
+				shmRes[i].allArray[j] -= shmRes[i].relArray[j];
+				shmRes[i].relArray[j] = 0;
+			}
+		}
+	}
+	
 	/* Check for Resource Requests/Releases */
-	for(i = 0; i < 20; i++)
+	for(i = numShared; i < 20; i++)
 	{
 		for(j = 0; j < maxSlaves; j++)
 		{
@@ -610,6 +691,19 @@ do
 					if(logCount < 100000 && verbose == 1)
 					{
 						snprintf(errmsg, sizeof(errmsg),"Resource:   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19\n");
+						fprintf(fp, errmsg);
+						logCount += 1;
+					}
+					if(logCount < 100000 && verbose == 1)
+					{
+						snprintf(errmsg, sizeof(errmsg),"Shared:    ");
+						fprintf(fp, errmsg);
+						for(m = 0; m < 20; m++)
+						{
+							snprintf(errmsg, sizeof(errmsg), "%2d ", shmRes[m].shared);
+							fprintf(fp, errmsg);
+						}
+						snprintf(errmsg, sizeof(errmsg),"\n");
 						fprintf(fp, errmsg);
 						logCount += 1;
 					}
