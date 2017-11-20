@@ -47,6 +47,7 @@ sem_t * semTerm;
 sem_t * semChild;
 int lockProc[18] = {0};
 int logCount = 0;
+int totLocked = 0;
 /* Insert other shmid values here */
 
 
@@ -294,10 +295,12 @@ int numShared = 0;
 int cycles = 0;
 int pKill = -1; 
 int deadlocked = 0;
-int numLocked = 0;
 int deadCount = 0;
 int deadKills = 0;
+int normTerm = 0;
 int requests = 0;
+int DDARuns = 0;
+float deadTermPercent = 0;
 
 /* Seed RNG */
 srand(pid * time(NULL));
@@ -657,6 +660,7 @@ do
 				fprintf(fp, errmsg);
 				logCount += 1;
 			}
+			DDARuns++;
 			if(deadlock(20, maxSlaves, numShared))
 			{
 				deadlocked = 1;
@@ -671,11 +675,22 @@ do
 						{
 							snprintf(errmsg, sizeof(errmsg), "P%2d, ", i);
 							fprintf(fp, errmsg);
+							totLocked++;
 						}
 					}
-					snprintf(errmsg, sizeof(errmsg), "\b\b deadlocked\n");
+					snprintf(errmsg, sizeof(errmsg), "deadlocked\n");
 					fprintf(fp, errmsg);
 					logCount += 1;
+				}
+				else
+				{
+					for(i = 0; i < maxSlaves; i++)
+					{
+						if(lockProc[i] == 1)
+						{
+							totLocked++;
+						}
+					}
 				}
 				if(logCount < 100000)
 				{
@@ -736,6 +751,7 @@ do
 /********************End Main Program Loop********************/
 
 deadKills = shmTerm[19];
+normTerm = numProc - deadKills;
 sleep(1);
 /* Kill all slave processes */
 for(i = 0; i < maxSlaves; i++)
@@ -746,6 +762,7 @@ for(i = 0; i < maxSlaves; i++)
 		kill(shmChild[i], SIGINT);
 		sem_wait(semDead);
 		wait(shmChild[i]);
+		normTerm--;
 	}
 	/*else
 	{
@@ -805,10 +822,25 @@ for(i = 0; i < 20; i++)
 	printf("%2d ", shmRes[i].available);
 }
 printf("\n"); */
-/* Display Deadlock Count */
-printf("\n\nNumber of Deadlocks: %d\n", deadCount);
+
+/**********************FINAL RESULTS**********************/
+/* Requests Granted */
+printf("Number of Requests Granted: %d\n", requests);
 /* Display Deadlock Kills */
-printf("\n\nNumber of Killed Deadlocked Processes: %d\n", deadKills);
+printf("Number of Killed Deadlocked Processes: %d\n", deadKills);
+/* Display Normal Terminations */
+printf("Number of Normally Terminated Processes: %d\n", normTerm);
+/* Display Deadlocked Processes */
+printf("Number of Deadlocked Processes: %d\n", totLocked);
+/* Display Number of DDA Runs */
+printf("Number of DDA Runs: %d\n", DDARuns);
+/* Display Deadlock Count */
+printf("Number of Deadlocks Detected: %d\n", deadCount);
+/* Display Deadlock Termination Percentage */
+deadTermPercent = ((float)deadKills/(float)totLocked)*100;
+printf("Percentage of Deadlock Terminations: %02.2f%%\n", deadTermPercent);
+/********************END FINAL RESULTS********************/
+
 /********************DEALLOCATE MEMORY********************/
 errno = shmdt(shmTime);
 if(errno == -1)
